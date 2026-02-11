@@ -26,6 +26,30 @@ def get_file_type(ext):
     if ext in DOCS_EXT: return "DOKUMENT"
     return "INNY"
 
+def get_action_suggestion(path):
+    path_lower = path.lower()
+    trash_triggers = ['temp', 'tmp','downloads', 'pobrane', 'desktop', 'pulpit', 'copy', 'kopia']
+    if any(trigger in path_lower for trigger in trash_triggers):
+        return "DO USUNIĘCIA"
+    return "ZACHOWAJ (ORYGINAŁ?)"
+
+def calculate_fast_hash(file_path):
+    """Sprawdza tylko początek i koniec dużych plików, aby zaoszczędzić czas HDD."""
+    try:
+        size = os.path.getsize(file_path)
+        if size < LARGE_FILE_THRESHOLD:
+            return calculate_sha256(file_path)
+    
+    # Dla gigantów: czytaj 64KB z początku i 64KB z końca
+        with open(file_path, 'rb') as f:
+            start_chunk = f.read(CHUNK_SIZE)
+            f.seek(-CHUNK_SIZE, os.SEEK_END)
+            end_chunk = f.read(CHUNK_SIZE)
+            return hashlib.sha256(start_chunk + end_chunk).hexdigest() + "_fast"
+    except Exception as e:
+        log_error(f"Błąd Fast-Hash: {file_path} | {e}")
+        return None
+
 def calculate_sha256(file_path):
     """Pancerny odczyt pliku bajt po bajcie."""
     sha256 = hashlib.sha256()
@@ -34,63 +58,56 @@ def calculate_sha256(file_path):
             while chunk := f.read(CHUNK_SIZE):
                 sha256.update(chunk)
             return sha256.hexdigest()
-    except (OSError, PermissionError) as e:
-        log_error(f"Błąd dostępu: {file_path} | {e}")
+    except Exception as e:
+        log_error(f"Błąd SHA256: {file_path} | {e}")
         return None
 
 def run_omni_scanner(root_path, mode='1'):
-    # Faza 1: Skanowanie rozmiarów (Szybkie)
     files_by_size = defaultdict(list)
-    total_scanned = 0
-
-    print(f"\n[{time.strftime('%H:%M:%S')}] KROK 1: Analiza struktury plików ...")
-
+    print(f"\n[{time.strftime('%H:%M:%S')}] KROK 1: Skanowanie rozmiarów...")
     for dirpath, _, filenames in os.walk(root_path):
         for f in filenames:
             ext = os.path.splitext(f)[1].lower()
-
-            # Filtrowanie trybów
             if mode == '1' and ext not in PHOTO_EXT: continue
-            if mode == '2' and ext not in PHOTO_EXT and ext not in DOCS_EXT: continue
-            # Tryb 3 (Wszystko) przechodzi bez filtrów
-
+            if mode == '2' and ext not in (PHOTO_EXT | DOCS_EXT): continue
             full_path = os.path.join(dirpath, f)
             try:
                 size = os.path.getsize(full_path)
-                if size > 0:
-                    files_by_size[size].append(full_path)
-                    total_scanned += 1
-            except OSError as e:
-                log_error(f"Nie udało się odczytać rozmiaru: {full_path} | {e}")
-                continue
-    
-    # Faza 2: Hashowanie (Precyzyjne)
+                if size > 0: files_by_size[size].append(full_path)
+            except OSError: continue
+
     potential = {s: p for s, p in files_by_size.items() if len(p) > 1}
     num_to_hash = sum(len(p) for p in potential.values())
-
-    print(f"[{time.strftime('%H:%M:%S')}] KROK 2: Hashowanie SHA-256 dla {num_to_hash} plików ...")
+    print(f"[{time.strftime('%H:%M:%S')}] KROK 2: Hashowanie ({num_to_hash} plików)...")
 
     duplicates = defaultdict(list)
     processed = 0
     total_wasted_size = 0
 
     for size, paths in potential.items():
-        group_hashes = defaultdict(list)
+        temp_hashes = defaultdict(list)
         for path in paths:
-            h = calculate_sha256(path)
-            if h:
-                group_hashes[h].append(path)
+            # Używamy FAST-HASH dla prędkości
+            h = calculate_fast_hash(path)
+            if h: temp_hashes[h].append(path)
             processed += 1
-
-            if processed % 5 == 0 or processed == num_to_hash:
-                print(f" Postęp: {processed}/{num_to_hash} ({(processed/num_to_hash)*100:.1f}%)", end='\r')
+            if processed % 10 == 0: print(f" Postęp: {processed}/{num_to_hash}", end='\r')
         
-        # Analiza wyników wewnątrz grupy o tym samym rozmiarze
-        for h, duplicated_paths in group_hashes.items():
-            if len(duplicated_paths) > 1:
-                duplicates[h].extend(duplicated_paths)
-                # Rozmiar marnowany = (ilosc kopii - 1) * rozmiar pliku
-                total_wasted_size += size * (len(duplicated_paths) - 1)
+        for h, dup_paths in temp_hashes.items():
+            if len(dup_paths) > 1:
+                # Jeśli Fast-Hash wykrył duplikaty dużych plików, weryfikujemy je pełnym SHA256
+                if h.endswith("_fast"):
+                    verified = defaultdict(list)
+                    for dp in dup_paths:
+                        vh = calculate_sha256(dp)
+                        if vh: verified[vh].append(dp)
+                    for vh, v_paths in verified.items():
+                        if len(v_paths) > 1:
+                            duplicates[vh].extend(v_paths)
+                            total_wasted_size += size * (len(v_paths) - 1)
+                else:
+                    duplicates[h].extend(dup_paths)
+                    total_wasted_size += size * (len(dup_paths) - 1)
 
     return duplicates, total_wasted_size
 
@@ -121,8 +138,41 @@ def save_omni_csv(results, total_wasted):
     except PermissionError:
         print(f"\nBŁĄD: Plik CSV jest otwarty w Excelu. Zamknij go i spróbuj ponownie.")
 
+def save_html_report(results, total_wasted, filename):
+    wasted_gb = round(total_wasted / (1024**3), 2)
+    html_content = f"""
+    <html><head><title>OmniScanner Report</title>
+    <style>
+        body {{ font-family: sans-serif; background: #f4f4f9; padding: 20px; }}
+        table {{ border-collapse: collapse; width: 100%; background: white; }}
+        th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }}
+        th {{ background: #007bff; color: white; }}
+        tr:hover {{ background-color: #f1f1f1; }}
+        .delete {{ color: red; font-weight: bold; }}
+        .keep {{ color: green; font-weight: bold; }}
+        .summary {{ background: #333; color: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; }}
+    </style></head><body>
+    <div class="summary">
+        <h2>Raport OmniScanner</h2>
+        <p>Data: {time.strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p>Marnowane miejsce: <b>{wasted_gb} GB</b></p>
+    </div>
+    <table><tr><th>Typ</th><th>Nazwa</th><th>Rozmiar (MB)</th><th>Sugestia</th><th>Katalog</th></tr>
+    """
+    for h, paths in results.items():
+        for p in paths:
+            ext = os.path.splitext(p)[1].lower()
+            size_mb = round(os.path.getsize(p) / (1024*1024), 2)
+            sug = get_action_suggestion(p)
+            sug_class = "delete" if sug == "DO USUNIĘCIA" else "keep"
+            html_content += f"<tr><td>{get_file_type(ext)}</td><td>{os.path.basename(p)}</td><td>{size_mb}</td><td class='{sug_class}'>{sug}</td><td>{p}</td></tr>"
+    html_content += "</table></body></html>"
+
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(html_content)
+
 if __name__ == "__main__":
-    print("=== OMNI SCANNER v1.2 ===")
+    print("=== OMNI SCANNER v1.3 ===")
     print("1. Tylko Zdjęcia")
     print("2. Zdjęcia + Dokumenty")
     print("3. Wszystkie pliki (Głęboki skan)")
@@ -131,13 +181,29 @@ if __name__ == "__main__":
     path = input("Podaj ścieżkę (np. D:\\ lub /home/user): ").strip().replace('"', '')
 
     if os.path.exists(path):
-        start_time = time.time()
+        start = time.time()
         dups, wasted = run_omni_scanner(path, choice)
         if dups:
-            save_omni_csv(dups, wasted)
+            timestamp = SESSION_ID
+            # Zapisz CSV
+            csv_name = f"raport_{timestamp}.csv"
+            with open(csv_name, 'w', newline='', encoding='utf-8-sig') as f:
+                w = csv.writer(f, delimiter=';')
+                w.writerow(['Hash', 'Nazwa', 'Typ', 'Rozmiar (MB)', 'Sugestia', 'Katalog'])
+                for h, paths in dups.items():
+                    for p in paths:
+                        size_mb = round(os.path.getsize(p) / (1024*1024), 2)
+                        w.writerow([h[:10], os.path.basename(p), get_file_type(os.path.splitext(p)[1].lower()), size_mb, get_action_suggestion(p), p])
+            
+            # Zapisz HTML
+            html_name = f"raport_{timestamp}.html"
+            save_html_report(dups, wasted, html_name)
+            
+            print(f"\n\nGOTOWE! Raporty:")
+            print(f"- csv:  {csv_name}")
+            print(f"- html: {html_name}\n")
+            print(f"Odzyskasz: {round(wasted / (1024**3), 2)} GB | Czas: {round(time.time()-start, 2)}s")
         else:
-            print("\nNie znaleziono żadnych duplikatów.")
-        duration = round(time.time() - start_time, 2)
-        print(f"Czas pracy: {duration} s.\n")
+            print("\nBrak duplikatów.")
     else:
-        print("Ścieżka nie istnieje!")
+        print("Błędna ścieżka.")
