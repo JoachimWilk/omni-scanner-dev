@@ -6,10 +6,20 @@ from collections import defaultdict
 
 # --- KONFIGURACJA ---
 CHUNK_SIZE = 65536 # Optymalne pod HDD (64KB)
+LARGE_FILE_THRESHOLD = 1024 * 1024 * 100 # 100MB
 
 # Grupy rozszerzeń dla trybu SMART
 PHOTO_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.raw', '.cr2', '.nef', '.arw', '.dng', '.tiff'}
 DOCS_EXT = {'.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.txt', '.odt', '.rtf'}
+
+# Generujemy wspólny znacznik czasu dla nazewnictwa plików w tej sesji
+SESSION_ID = time.strftime("%Y%m%d_%H%M%S")
+
+def log_error(message):
+    """Zapisuje błędy do uinikalnego pliku, zamiast zaśmiecać konsolę."""
+    log_file = f"error_{SESSION_ID}.log"
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(f"[{time.strftime('%H:%M:%S')}] {message}\n")
 
 def get_file_type(ext):
     if ext in PHOTO_EXT: return "ZDJĘCIE"
@@ -25,7 +35,7 @@ def calculate_sha256(file_path):
                 sha256.update(chunk)
             return sha256.hexdigest()
     except (OSError, PermissionError) as e:
-        print(f"\n[!] Błąd dostępu do: {os.path.basename(file_path)} ({e})")
+        log_error(f"Błąd dostępu: {file_path} | {e}")
         return None
 
 def run_omni_scanner(root_path, mode='1'):
@@ -50,7 +60,8 @@ def run_omni_scanner(root_path, mode='1'):
                 if size > 0:
                     files_by_size[size].append(full_path)
                     total_scanned += 1
-            except OSError:
+            except OSError as e:
+                log_error(f"Nie udało się odczytać rozmiaru: {full_path} | {e}")
                 continue
     
     # Faza 2: Hashowanie (Precyzyjne)
@@ -61,35 +72,57 @@ def run_omni_scanner(root_path, mode='1'):
 
     duplicates = defaultdict(list)
     processed = 0
+    total_wasted_size = 0
 
     for size, paths in potential.items():
+        group_hashes = defaultdict(list)
         for path in paths:
             h = calculate_sha256(path)
             if h:
-                duplicates[h].append(path)
-                processed += 1
-            if processed % 10 == 0 or processed == num_to_hash:
-                print(f" Postęp: {processed}/{num_to_hash} ({(processed/num_to_hash)*100:.1f}%)", end='\r')
-    return {h: p for h, p in duplicates.items() if len(p) > 1}
+                group_hashes[h].append(path)
+            processed += 1
 
-def save_omni_csv(results, output_file="raport_omni.csv"):
+            if processed % 5 == 0 or processed == num_to_hash:
+                print(f" Postęp: {processed}/{num_to_hash} ({(processed/num_to_hash)*100:.1f}%)", end='\r')
+        
+        # Analiza wyników wewnątrz grupy o tym samym rozmiarze
+        for h, duplicated_paths in group_hashes.items():
+            if len(duplicated_paths) > 1:
+                duplicates[h].extend(duplicated_paths)
+                # Rozmiar marnowany = (ilosc kopii - 1) * rozmiar pliku
+                total_wasted_size += size * (len(duplicated_paths) - 1)
+
+    return duplicates, total_wasted_size
+
+def save_omni_csv(results, total_wasted):
+    output_file = f"raport_omni_{SESSION_ID}.csv"
+
     try:
         with open(output_file, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f, delimiter=';')
             writer.writerow(['Hash (Fragment)', 'Nazwa', 'Typ', 'Rozmiar (MB)', 'Katalog'])
 
+            # Sortujemy grupy, zeby najwieksze pliki byly na gorze (opcjonalne)
             for h, paths in results.items():
                 for p in paths:
                     ext = os.path.splitext(p)[1].lower()
-                    size_mb = round(os.path.getsize(p) / (1024*1024), 2)
+                    try:
+                        size_mb = round(os.path.getsize(p) / (1024*1024), 2)
+                    except OSError:
+                        size_mb =  0 
                     writer.writerow([h[:10], os.path.basename(p), get_file_type(ext), size_mb, os.path.dirname(p)])
                 writer.writerow(['---'] * 5)
-        print(f"\n\nGOTOWE! Wynik w pliku: {output_file}")
+        
+        wasted_gb = round(total_wasted / (1024**3), 2)
+        print(f"\n\n" + "="*50)
+        print(f" GOTOWE! Wynik zapisany w: {output_file}")
+        print(f" Logi błędów (jeśli wystąpiły): error_{SESSION_ID}.log")
+        print(f" Potencjalne miejsce do odzyskania: {wasted_gb} GB")
     except PermissionError:
         print(f"\nBŁĄD: Plik CSV jest otwarty w Excelu. Zamknij go i spróbuj ponownie.")
 
 if __name__ == "__main__":
-    print("=== OMNI SCANNER v1.0 ===")
+    print("=== OMNI SCANNER v1.2 ===")
     print("1. Tylko Zdjęcia")
     print("2. Zdjęcia + Dokumenty")
     print("3. Wszystkie pliki (Głęboki skan)")
@@ -98,12 +131,13 @@ if __name__ == "__main__":
     path = input("Podaj ścieżkę (np. D:\\ lub /home/user): ").strip().replace('"', '')
 
     if os.path.exists(path):
-        start = time.time()
-        dups = run_omni_scanner(path, choice)
+        start_time = time.time()
+        dups, wasted = run_omni_scanner(path, choice)
         if dups:
-            save_omni_csv(dups)
+            save_omni_csv(dups, wasted)
         else:
             print("\nNie znaleziono żadnych duplikatów.")
-        print(f"Czas pracy: {round(time.time() - start, 2)} s.")
+        duration = round(time.time() - start_time, 2)
+        print(f"Czas pracy: {duration} s.\n")
     else:
         print("Ścieżka nie istnieje!")
