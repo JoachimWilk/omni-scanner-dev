@@ -42,7 +42,7 @@
 * **Fast-Hash:** Nawet filmy o rozmiarze 10GB są analizowane w kilka sekund dzięki technologii sprawdzania skrajnych bloków danych.
 * **100% Read-Only:** Skrypt nie posiada modułu usuwania – Twoje dane są bezpieczne, decyzję podejmujesz Ty w oparciu o raport.
 
-**Status:** Wersja v1.4 (Final Multimedia Stable)  
+**Status:** Wersja v1.4 (Multimedia Edition)  
 **Autor:** JoachimWilk
 
 ## 🤖 Vibe Coding 
