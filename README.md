@@ -3,7 +3,11 @@
 
 **OmniScanner** to zaawansowane narzędzie do zarządzania zasobami cyfrowymi. Wersja 1.4 wprowadza pełne wsparcie dla formatów wideo, co czyni go idealnym narzędziem do czyszczenia dysków z ciężkich nagrań 4K, dubli filmowych i starych archiwów mobilnych.
 
----
+![aipowered](https://img.shields.io/badge/powered_by-Gemini-blue)
+![license](https://img.shields.io/badge/license-MIT-orange)
+![version](https://img.shields.io/badge/version-1.4-green)
+![platform](https://img.shields.io/badge/platform-linux|macos|window-lightgrey)
+
 
 ## 🌟 Nowości w wersji 1.4
 
@@ -39,3 +43,6 @@
 
 **Status:** Wersja v1.4 (Final Multimedia Stable)  
 **Autor:** JoachimWilk
+
+## 🤖 Vibe Coding 
+Ten projekt został stworzony w koncepcji **Vibe Coding** przy wsparciu narzędzia [Gemini AI](https://gemini.google.com)
