@@ -6,7 +6,7 @@
 ![aipowered](https://img.shields.io/badge/powered_by-Gemini-blue)
 ![license](https://img.shields.io/badge/license-MIT-orange)
 ![version](https://img.shields.io/badge/version-1.4-green)
-![platform](https://img.shields.io/badge/platform-linux|macos|window-lightgrey)
+![platform](https://img.shields.io/badge/platform-linux|macos|windows-lightgrey)
 
 
 ## 🌟 Nowości w wersji 1.4
