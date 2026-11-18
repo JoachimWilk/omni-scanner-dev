@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OmniScanner – Raport duplikatów</title>
+<style>
+  :root { --primary:#2563eb; --bg:#f1f5f9; --text:#1e293b; --muted:#64748b; --success:#22c55e; --warning:#f59e0b; }
+  * { box-sizing: border-box; }
+  body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:var(--text); margin:0; padding:20px; line-height:1.5; }
+  .container { max-width:1300px; margin:0 auto; }
+  .header { background:#fff; padding:20px 30px; border-radius:12px; box-shadow:0 4px 6px -1px rgba(0,0,0,.1); margin-bottom:20px; border-left:6px solid var(--primary); display:flex; flex-wrap:wrap; gap:16px; justify-content:space-between; align-items:center; }
+  h1 { margin:0; font-size:20px; text-transform:uppercase; letter-spacing:1px; }
+  h1 small { color:var(--muted); font-weight:normal; text-transform:none; letter-spacing:0; }
+  .stats { display:flex; flex-wrap:wrap; gap:10px; }
+  .stat { background:#f8fafc; padding:6px 12px; border-radius:8px; border:1px solid #e2e8f0; font-size:13px; }
+  .stat b { color:var(--primary); }
+  .notice { background:#fffbeb; border:1px solid #fde68a; color:#92400e; padding:10px 16px; border-radius:8px; margin-bottom:16px; font-size:13px; }
+  .controls { margin-bottom:20px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:#fff; padding:12px; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.1); position:sticky; top:10px; z-index:100; }
+  button { padding:8px 14px; border-radius:6px; cursor:pointer; font-weight:600; background:#f1f5f9; color:#475569; border:1px solid #e2e8f0; }
+  button:hover { background:#e2e8f0; }
+  button.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+  button.giant { border-color:var(--warning); color:#b45309; }
+  input[type=search] { padding:8px 12px; border:1px solid #cbd5e1; border-radius:6px; min-width:220px; }
+  label { font-size:13px; color:#475569; display:flex; gap:6px; align-items:center; }
+  .card { background:#fff; border-radius:12px; box-shadow:0 2px 4px rgba(0,0,0,.05); margin-bottom:20px; overflow:hidden; border:1px solid #e2e8f0; }
+  .ginfo { background:#f8fafc; padding:10px 20px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; font-size:11px; color:var(--muted); font-weight:bold; text-transform:uppercase; }
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  th { text-align:left; padding:10px 20px; font-size:11px; color:#94a3b8; text-transform:uppercase; background:#fafafa; }
+  td { padding:12px 20px; border-bottom:1px solid #f1f5f9; font-size:14px; vertical-align:middle; word-break:break-word; }
+  .c-type { width:110px; } .c-name { width:22%; } .c-act { width:210px; }
+  .pathbox { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+  .path { font-family:Consolas,Monaco,monospace; font-size:12px; color:#475569; word-break:break-all; line-height:1.3; }
+  .copy { font-size:10px; padding:5px 9px; white-space:nowrap; flex-shrink:0; }
+  .copy.ok { background:var(--success); color:#fff; border-color:var(--success); }
+  .badge { display:inline-block; padding:3px 8px; border-radius:4px; font-size:10px; font-weight:800; }
+  .t-photo { background:#dbeafe; color:#1e40af; } .t-video { background:#fce7f3; color:#9d174d; }
+  .t-doc { background:#fef3c7; color:#92400e; } .t-other { background:#f1f5f9; color:#475569; }
+  .a-keep { background:#dcfce7; color:#15803d; } .a-copy { background:#fef9c3; color:#854d0e; }
+  .size { color:var(--primary); font-weight:bold; font-size:11px; }
+  .hints { font-size:11px; color:var(--muted); margin-top:4px; }
+  .more { text-align:center; margin:24px 0; }
+  .empty { text-align:center; color:var(--muted); padding:40px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>OmniScanner <small id="ver"></small></h1>
+    <div class="stats" id="stats"></div>
+  </div>
+  <div class="notice">Raport jest tylko <b>sugestią</b>. W każdej grupie jeden plik jest zawsze oznaczony jako proponowany oryginał, ale decyzję o usunięciu podejmujesz Ty. Przed skasowaniem sprawdź, że oryginał otwiera się poprawnie.</div>
+  <div class="controls" id="controls"></div>
+  <div id="results"></div>
+  <div class="empty" id="empty" hidden>Brak grup spełniających wybrane filtry.</div>
+  <div class="more"><button id="more" hidden>Pokaż więcej grup</button></div>
+</div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  const D = JSON.parse(document.getElementById('data').textContent);
+  const LABEL = { photo: 'ZDJĘCIE', video: 'WIDEO', doc: 'DOKUMENT', other: 'INNY' };
+  const ACTION = { keep: 'ZACHOWAJ (ORYGINAŁ?)', copy: 'KOPIA – DO ROZWAŻENIA' };
+  const PAGE = 40;
+  const state = { filter: 'all', query: '', onlyCopies: false, shown: PAGE };
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;   // textContent => brak wstrzykiwania HTML
+    return e;
+  }
+  function fmtSize(b) {
+    const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+    while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+    return b.toFixed(i ? 1 : 0) + ' ' + u[i];
+  }
+  function copyText(text, btn) {
+    const done = () => { btn.textContent = '✅ OK'; btn.classList.add('ok');
+      setTimeout(() => { btn.textContent = '📋 KOPIUJ'; btn.classList.remove('ok'); }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(() => fallback(text, done));
+    } else { fallback(text, done); }
+  }
+  function fallback(text, done) {
+    const t = document.createElement('textarea'); t.value = text;
+    document.body.appendChild(t); t.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(t); done();
+  }
+
+  const S = D.summary;
+  document.getElementById('ver').textContent = '| v' + D.version + ' | ' + D.mode;
+  const stats = document.getElementById('stats');
+  [['Skan', D.generated], ['Grup', S.groups], ['Do odzyskania', fmtSize(S.wasted)],
+   ['Plików', S.files_matched], ['Błędy dostępu', S.errors]].forEach(([k, v]) => {
+    const s = el('div', 'stat', k + ': '); s.appendChild(el('b', '', String(v))); stats.appendChild(s);
+  });
+
+  const controls = document.getElementById('controls');
+  const filters = [['all', 'Wszystkie'], ['photo', 'Zdjęcia'], ['video', 'Wideo'],
+                   ['doc', 'Dokumenty'], ['giant', '⚠️ Giganty (>100 MB)']];
+  const buttons = filters.map(([key, text]) => {
+    const b = el('button', key === 'giant' ? 'giant' : '', text);
+    if (key === 'all') b.classList.add('active');
+    b.addEventListener('click', () => {
+      state.filter = key; state.shown = PAGE;
+      buttons.forEach(x => x.classList.remove('active')); b.classList.add('active'); render();
+    });
+    controls.appendChild(b); return b;
+  });
+  const search = el('input'); search.type = 'search'; search.placeholder = 'Szukaj w ścieżkach…';
+  search.addEventListener('input', () => { state.query = search.value.toLowerCase(); state.shown = PAGE; render(); });
+  controls.appendChild(search);
+  const lab = el('label'); const cb = el('input'); cb.type = 'checkbox';
+  cb.addEventListener('change', () => { state.onlyCopies = cb.checked; render(); });
+  lab.appendChild(cb); lab.appendChild(document.createTextNode('Ukryj proponowane oryginały'));
+  controls.appendChild(lab);
+
+  function groupVisible(g) {
+    if (state.filter === 'giant' && g.size < D.giant_threshold) return false;
+    if (['photo', 'video', 'doc'].includes(state.filter) && !g.entries.some(e => e.type === state.filter)) return false;
+    if (state.query && !g.entries.some(e => e.path.toLowerCase().includes(state.query))) return false;
+    return true;
+  }
+
+  function card(g) {
+    const c = el('div', 'card');
+    const info = el('div', 'ginfo');
+    info.appendChild(el('span', '', 'Hash: ' + g.digest.slice(0, 12) + '…'));
+    info.appendChild(el('span', '', 'Plików: ' + g.entries.length + ' | Rozmiar: ' + fmtSize(g.size) +
+                        ' | Do odzyskania: ' + fmtSize(g.wasted)));
+    c.appendChild(info);
+    const table = el('table');
+    const head = el('tr');
+    [['Typ', 'c-type'], ['Nazwa i rozmiar', 'c-name'], ['Sugestia', 'c-act'], ['Pełna lokalizacja', '']]
+      .forEach(([t, cls]) => head.appendChild(el('th', cls, t)));
+    const thead = el('thead'); thead.appendChild(head); table.appendChild(thead);
+    const tbody = el('tbody');
+    g.entries.forEach(e => {
+      if (state.onlyCopies && e.action === 'keep') return;
+      const tr = el('tr');
+      const t1 = el('td'); t1.appendChild(el('span', 'badge t-' + e.type, LABEL[e.type])); tr.appendChild(t1);
+      const t2 = el('td'); const nm = el('b', '', e.name); t2.appendChild(nm); t2.appendChild(el('br'));
+      t2.appendChild(el('span', 'size', fmtSize(g.size) + ' · ' + new Date(e.mtime * 1000).toLocaleDateString('pl-PL')));
+      tr.appendChild(t2);
+      const t3 = el('td'); t3.appendChild(el('span', 'badge a-' + e.action, ACTION[e.action]));
+      if (e.hints.length) t3.appendChild(el('div', 'hints', e.hints.join(' · ')));
+      tr.appendChild(t3);
+      const t4 = el('td'); const box = el('div', 'pathbox');
+      box.appendChild(el('div', 'path', e.path));
+      const btn = el('button', 'copy', '📋 KOPIUJ');
+      btn.addEventListener('click', () => copyText(e.path, btn));
+      box.appendChild(btn); t4.appendChild(box); tr.appendChild(t4);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody); c.appendChild(table);
+    return c;
+  }
+
+  const results = document.getElementById('results');
+  const more = document.getElementById('more');
+  const empty = document.getElementById('empty');
+  more.addEventListener('click', () => { state.shown += PAGE; render(); });
+
+  function render() {
+    results.textContent = '';
+    const vis = D.groups.filter(groupVisible);
+    vis.slice(0, state.shown).forEach(g => results.appendChild(card(g)));
+    more.hidden = vis.length <= state.shown;
+    more.textContent = 'Pokaż więcej grup (' + Math.min(state.shown, vis.length) + ' / ' + vis.length + ')';
+    empty.hidden = vis.length > 0;
+  }
+  render();
+})();
+</script>
+</body>
+</html>
