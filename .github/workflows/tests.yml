@@ -15,4 +15,4 @@ jobs:
       - name: Wersja Python
         run: python --version
       - name: Testy
-      - run: python -m unittest discover -s tests -t . -v
+        run: python -m unittest discover -s tests -t . -v
