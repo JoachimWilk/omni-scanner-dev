@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omniscanner"
+version = "1.5.0"
+description = "Bezpieczny skaner duplikatów zdjęć, wideo i dokumentów (tylko odczyt)."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "JoachimWilk" }]
+
+[project.scripts]
+omniscanner = "omniscanner.cli:main"
+
+[tool.setuptools]
+packages = ["omniscanner"]
+
+[tool.setuptools.package-data]
+omniscanner = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
